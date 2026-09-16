@@ -1,0 +1,134 @@
+---
+name: prewalk
+description: "Run an orchestrated coding handoff: SOL investigates and lands one credible edit, dispatches a configured native DeepSeek subagent to complete implementation at the Luna execution boundary, waits for it, then SOL reviews the actual final diff. Also resume execution or review from PREWALK_PHASE markers. Use when the user asks for Prewalk, SOL-to-DeepSeek execution, a DeepSeek executor with SOL review, frontier-model preparation before delegated coding, execution from a Prewalk package, or final review of returned executor work."
+---
+
+# Prewalk
+
+Transfer an evidence-backed coding trajectory from SOL through a native DeepSeek executor and back to SOL review. Do not substitute a prose plan for contact with the code.
+
+## Select the run mode
+
+Choose the mode from the incoming request:
+
+- **Orchestrated SOL run:** Use when no phase marker exists. Run SOL prewalk, dispatch DeepSeek, wait, then perform SOL review in the same parent task.
+- **DeepSeek execution:** Use when the prompt begins with `PREWALK_PHASE: DEEPSEEK_EXECUTE` or the legacy marker `PREWALK_PHASE: LUNA_EXECUTE`. Complete the executor phase and return a SOL review package.
+- **SOL review:** Use when the incoming prompt begins with `PREWALK_PHASE: SOL_REVIEW`.
+
+Never apply the stop-after-one-edit boundary to DeepSeek execution. Never repeat SOL investigation in executor mode unless retained evidence is contradicted by the repository.
+
+## Shared rules
+
+- Read applicable `AGENTS.md` files and inspect worktree status before acting.
+- Preserve unrelated dirty-worktree changes and state the inherited baseline.
+- Treat observed repository state, tests, logs, and diffs as authoritative over handoff prose.
+- Never search the web or public issue history for an existing solution unless the user explicitly asks. Repository-local history and documentation are allowed.
+- Report exact commands and outcomes. Do not claim checks that were not run.
+
+## DeepSeek executor contract
+
+- Treat DeepSeek as the Luna execution role; "Luna boundary" describes the responsibility boundary, not a required model name.
+- Dispatch only through the managed DeepSeek executor surface: a `codex exec` child process with `model=deepseek-flash`, `model_provider="deepseek"`, `model_reasoning_effort="max"`. Do not dispatch with the native `spawn_agent` tool: on desktop builds ≥ 0.146 the collaboration namespace is gated to the ChatGPT backend, so a native spawn cannot route a child to the DeepSeek provider and fails with a model-unsupported 400 (see openai/codex#31882, openai/codex#36957).
+- Run the executor via the staged desktop runtime managed by the separate `codex-deepseek-subagent` skill (its `status`/`test`/`repair` commands own the runtime path, provider config, catalog, and credential). Do not hand-maintain TOML, JSON, credentials, or runtime copies for this contract.
+- Configuration and routing verification belong to the `codex-deepseek-subagent` skill; if its status is not `configured`/`ready`, run its `repair` before dispatching.
+- Give the executor a self-contained text prompt (the handoff package) because it receives no parent context. Launch it from the task workspace with a writable sandbox so it can edit the repository, and set `CODEX_HOME` to the Codex home that holds the managed configuration.
+- DeepSeek is text-only. Inspect visual inputs in SOL and encode all necessary visual facts, paths, constraints, and acceptance criteria in the handoff.
+- Keep final judgment in SOL. DeepSeek implements, debugs, validates, and reports; it does not perform the final review.
+
+## Phase A: SOL prewalk and orchestration
+
+### Orient
+
+Restate the requested outcome and constraints briefly. Use targeted search to trace the behavior from its entry point through relevant state, dependencies, and validation surfaces. Prefer evidence in this order:
+
+1. Reproduction, failing test, log, or compiler error
+2. Call sites and nearby tests
+3. Implementations and configuration reached at runtime
+4. Local documentation and version-control history
+
+Record the leading explanation and important eliminated hypotheses. Avoid unrelated subsystems.
+
+### Pass the confidence gate
+
+Do not edit until all are known:
+
+- The behavior or invariant that must change
+- The responsible symbol, configuration, or boundary
+- Why the intended edit addresses the cause
+- A focused validation command or check
+- Compatibility risks and behavior that must remain unchanged
+
+If blocked, do not manufacture an edit. Return the missing evidence or authority and do not dispatch DeepSeek.
+
+### Create the trajectory
+
+Create a TODO list using the task's plan or TODO mechanism:
+
+- Use 3-8 items with exactly one in progress.
+- Attach validation to every implementation item.
+- Keep focused and broader regression verification as explicit items when appropriate.
+- Make the first implementation item the smallest coherent slice that demonstrates the intended pattern.
+
+### Land the first credible edit
+
+Make exactly one coherent implementation edit. It may include inseparable adjacent hunks or files, but must represent one atomic slice. Inspect its diff. Run only a fast syntax, compile, or focused check when needed to prove the edit is not malformed. Do not debug onward or start the second implementation step in SOL.
+
+### Dispatch DeepSeek at the Luna boundary
+
+Read [handoff-format.md](references/handoff-format.md) and populate the **SOL to DeepSeek** template entirely from observed evidence. Include current TODO statuses, the first edit, inherited worktree conditions, commands, failures, risks, visual facts when applicable, and the next validation.
+
+When the executor surface is ready (per the `codex-deepseek-subagent` skill status), create a short unique `HANDOFF_ID`, write the populated handoff package to a temporary file, then launch the managed executor with the exec tool using this shape (adjust quoting for the active shell; `<` redirects the package into stdin):
+
+```sh
+CODEX_HOME="$CODEX_HOME" "<staged-codex.exe>" exec --skip-git-repo-check -s workspace-write -C "<task workspace>" -m deepseek-flash -c model_provider="\"deepseek\"" -c model_reasoning_effort="\"max\"" - < "<handoff-package-file>"
+```
+
+where `<staged-codex.exe>` is the desktop runtime path reported by the `codex-deepseek-subagent` skill (run its `status`). Allow a long timeout or run it as a background task for substantial packages. Do not implement in parallel or ask the user to copy the prompt.
+
+After the executor process finishes, require its final message to contain `PREWALK_PHASE: SOL_REVIEW` and the same `HANDOFF_ID`. If the process failed before producing a turn (nonzero exit, auth or provider error, empty output), treat the result as a routing failure: do not claim execution or enter review, preserve the first edit, return the original copy-ready handoff, and run the `codex-deepseek-subagent` skill's `repair`. If repository evidence shows executor work occurred but only the return package is malformed, reconstruct the changed-path and validation inventory and proceed to Phase C. In all successful cases, inspect the actual worktree and treat the package as navigation context, not proof.
+
+## Phase B: DeepSeek execution
+
+### Activate executor mode
+
+Treat `PREWALK_PHASE: DEEPSEEK_EXECUTE` and legacy `PREWALK_PHASE: LUNA_EXECUTE` as explicit cancellation of SOL's stop boundary. Retain the incoming `HANDOFF_ID` unchanged for the return package. Do not invoke SOL prewalk again. Inspect worktree status, the retained first diff, and the handed-off evidence before reopening files.
+
+Adopt the handed-off TODO list. Re-plan only when repository evidence invalidates it; record the reason and keep the list bounded.
+
+### Execute and verify
+
+Complete the remaining implementation, debugging, focused tests, and appropriate regression checks. Preserve the first edit when sound; revise it when validation shows it is wrong. Track all changed paths and commands. Do not stop merely because the handoff's first suggestion fails.
+
+Before finishing:
+
+- Inspect the complete diff against the inherited baseline.
+- Check requirements, edge cases, compatibility, and unintended changes.
+- Run the strongest practical focused and regression validation.
+- Mark TODO items accurately; leave unresolved work explicit.
+
+### Return to SOL
+
+Read [handoff-format.md](references/handoff-format.md). Return a concise completion status followed by one fenced, copy-ready package using the **DeepSeek to SOL** template. Generate it whether execution completed or became blocked.
+
+Include the original objective, inherited first edit, complete changed-path inventory, implementation decisions, exact validation results, unresolved risks, and the diff range or baseline SOL should review. Do not perform the SOL review yourself.
+
+## Phase C: SOL review
+
+Enter this phase after the orchestrated DeepSeek child returns or when the incoming prompt begins with `PREWALK_PHASE: SOL_REVIEW`. This is a review-only phase unless the user explicitly asks for fixes. Inspect the actual worktree and diff; do not trust the executor summary alone. Review for:
+
+- Requirement coverage and behavioral correctness
+- Root-cause alignment and architectural consistency
+- Error paths, concurrency, security, compatibility, and data migration risks
+- Test quality and gaps between claimed and observed validation
+- Unrelated or accidental changes
+
+Run targeted read-only checks or tests when useful. Report actionable findings by severity with precise paths and lines. If no findings exist, say so explicitly and list residual risks or checks not performed. Include a concise execution/validation status. Do not regenerate another executor prompt unless the user requests remediation.
+
+## Guardrails
+
+- Do not create a standalone plan file as the SOL deliverable.
+- Do not omit the self-contained DeepSeek prompt at the dispatch or recovery boundary.
+- Do not let SOL continue implementation while DeepSeek is responsible for execution.
+- Do not let DeepSeek self-approve its implementation.
+- Do not expose secrets, full environment files, or irrelevant diffs in handoff prompts.
+- Do not claim end-to-end completion before SOL has inspected the returned work and actual diff.
