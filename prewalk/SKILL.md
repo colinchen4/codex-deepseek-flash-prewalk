@@ -80,10 +80,12 @@ Read [handoff-format.md](references/handoff-format.md) and populate the **SOL to
 When the executor surface is ready (per the `codex-deepseek-subagent` skill status), create a short unique `HANDOFF_ID`, write the populated handoff package to a temporary file, then launch the managed executor with the exec tool using this shape (adjust quoting for the active shell; `<` redirects the package into stdin):
 
 ```sh
-CODEX_HOME="$CODEX_HOME" "<staged-codex.exe>" exec --skip-git-repo-check -s workspace-write -C "<task workspace>" -m deepseek-flash -c model_provider="\"deepseek\"" -c model_reasoning_effort="\"max\"" - < "<handoff-package-file>"
+CODEX_HOME="$CODEX_HOME" "<staged-codex.exe>" exec --skip-git-repo-check -s danger-full-access -C "<task workspace>" -m deepseek-flash -c model_provider="\"deepseek\"" -c model_reasoning_effort="\"max\"" -c approvals_reviewer="\"user\"" - < "<handoff-package-file>"
 ```
 
-where `<staged-codex.exe>` is the desktop runtime path reported by the `codex-deepseek-subagent` skill (run its `status`). Allow a long timeout or run it as a background task for substantial packages. Do not implement in parallel or ask the user to copy the prompt.
+where `<staged-codex.exe>` is the desktop runtime path reported by the `codex-deepseek-subagent` skill (run its `status`).
+
+The executor deliberately runs unsandboxed (`danger-full-access`) and `approvals_reviewer` is forced to `user` so nothing blocks on an interactive approval chain: the Windows logon sandbox used by `workspace-write` cannot spawn processes when the workspace path contains spaces on volumes without 8.3 short names (`CreateProcessWithLogonW failed: 2`), and its `apply_patch` write path fails on spaced paths as well, so a sandboxed DeepSeek executor cannot reliably work in typical `.../My Project` checkouts. Keep the boundary instead: the executor is a non-interactive child that only receives the handoff package, makes no claims, and every change is reviewed by SOL against the actual worktree diff before reporting. The parent session keeps its own sandbox setting. Allow a long timeout or run it as a background task for substantial packages. Do not implement in parallel or ask the user to copy the prompt.
 
 After the executor process finishes, require its final message to contain `PREWALK_PHASE: SOL_REVIEW` and the same `HANDOFF_ID`. If the process failed before producing a turn (nonzero exit, auth or provider error, empty output), treat the result as a routing failure: do not claim execution or enter review, preserve the first edit, return the original copy-ready handoff, and run the `codex-deepseek-subagent` skill's `repair`. If repository evidence shows executor work occurred but only the return package is malformed, reconstruct the changed-path and validation inventory and proceed to Phase C. In all successful cases, inspect the actual worktree and treat the package as navigation context, not proof.
 

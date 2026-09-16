@@ -14,11 +14,12 @@ On desktop/CLI builds ≥ 0.146 the collaboration namespace is gated to the Chat
 So the executor boundary here is a **managed `codex exec` child process**:
 
 ```sh
-codex exec --skip-git-repo-check -s workspace-write -C "<workspace>" \
-  -m deepseek-flash -c model_provider="deepseek" -c model_reasoning_effort="max" - < "<handoff-package>"
+codex exec --skip-git-repo-check -s danger-full-access -C "<workspace>" \
+  -m deepseek-flash -c model_provider="deepseek" -c model_reasoning_effort="max" \
+  -c approvals_reviewer="user" - < "<handoff-package>"
 ```
 
-This only relies on the top-level `model_provider` override and never touches the collab namespace, so it keeps working across the versions where native dispatch is backend-gated.
+This only relies on the top-level `model_provider` override and never touches the collab namespace, so it keeps working across the versions where native dispatch is backend-gated. The executor runs unsandboxed because the Windows logon sandbox (`workspace-write`/`read-only`) cannot spawn processes when the workspace path contains spaces on volumes without 8.3 short names (`CreateProcessWithLogonW failed: 2`), and its `apply_patch` write path fails on spaced paths; see [references/compatibility.md](codex-deepseek-subagent/references/compatibility.md) for the full findings. The boundary is kept instead: the executor is a non-interactive child that only receives the handoff package, and SOL reviews the actual worktree diff before reporting.
 
 ## Requirements
 

@@ -60,6 +60,7 @@ WINDOWS_CODEX_RELATIVE_CANDIDATES = (
     Path("Codex") / "resources" / "codex.exe",
 )
 WINDOWS_CODE_MODE_HOST = "codex-code-mode-host.exe"
+WINDOWS_SANDBOX_SETUP = "codex-windows-sandbox-setup.exe"
 
 
 class ManagerError(RuntimeError):
@@ -143,7 +144,10 @@ def platform_name() -> str:
 def windows_runtime_bundle_complete(candidate: Path) -> bool:
     if platform_name() != "windows":
         return True
-    return candidate.with_name(WINDOWS_CODE_MODE_HOST).is_file()
+    return all(
+        candidate.with_name(filename).is_file()
+        for filename in (WINDOWS_CODE_MODE_HOST, WINDOWS_SANDBOX_SETUP)
+    )
 
 
 def windows_store_codex_candidates() -> list[Path]:
@@ -187,13 +191,13 @@ def stage_windows_store_runtime(source: Path, paths: Paths) -> Path:
     package_name = source.parents[2].name
     cache_key = re.sub(r"[^A-Za-z0-9._-]+", "-", package_name)
     target_dir = paths.state_dir / "desktop-runtime" / cache_key
-    required = ("codex.exe", WINDOWS_CODE_MODE_HOST)
+    required = ("codex.exe", WINDOWS_CODE_MODE_HOST, WINDOWS_SANDBOX_SETUP)
     for filename in required:
         source_file = source.with_name(filename)
         if not source_file.is_file():
             raise ManagerError(
                 "desktop_runtime_incomplete",
-                f"Codex 桌面运行时缺少原生子代理组件：{filename}",
+                f"Codex 桌面运行时缺少执行面组件：{filename}",
             )
         target_file = target_dir / filename
         if not target_file.is_file() or target_file.stat().st_size != source_file.stat().st_size:
@@ -209,7 +213,7 @@ def find_desktop_codex(paths: Paths | None = None, allow_stage: bool = False) ->
             if platform_name() == "windows" and not windows_runtime_bundle_complete(candidate):
                 raise ManagerError(
                     "desktop_runtime_incomplete",
-                    f"CODEX_DESKTOP_BIN 缺少同目录 {WINDOWS_CODE_MODE_HOST}：{candidate}",
+                    f"CODEX_DESKTOP_BIN 同目录缺少执行面组件（{WINDOWS_CODE_MODE_HOST}、{WINDOWS_SANDBOX_SETUP}）：{candidate}",
                 )
             return str(candidate.resolve())
         raise ManagerError(
@@ -245,7 +249,7 @@ def find_desktop_codex(paths: Paths | None = None, allow_stage: bool = False) ->
         if store_candidates:
             raise ManagerError(
                 "desktop_runtime_staging_required",
-                "已找到 Windows Store Codex 桌面运行时；运行 setup、repair 或 test 后会缓存完整原生子代理组件。",
+                "已找到 Windows Store Codex 桌面运行时；运行 setup、repair 或 test 后会缓存完整执行面组件。",
             )
 
     raise ManagerError(
@@ -751,6 +755,7 @@ def merged_catalog(base: dict[str, Any], deepseek_model: dict[str, Any], parent_
         if model.get("slug") != MODEL
         and not str(model.get("slug", "")).startswith(LEGACY_MODEL_PREFIX)
     ]
+    deepseek_model["auto_review_model_override"] = MODEL
     models.append(deepseek_model)
     parent_found = False
     for model in models:
@@ -1182,16 +1187,70 @@ def native_test(paths: Paths, codex_bin: str) -> dict[str, Any]:
     }
 
 
+def executor_workchain_test(paths: Paths, codex_bin: str) -> dict[str, Any]:
+    # 验收真实工作链：在临时工作区用 workspace-write 沙箱执行“读目录 → 写文件 → 跑命令”。
+    # 只测连通性会漏掉 Windows 沙箱依赖（如 codex-windows-sandbox-setup.exe 缺失导致的
+    # CreateProcessWithLogonW failed: 2），届时执行器收到任务包也无法碰代码。
+    env = codex_child_env(paths)
+    workspace = Path(tempfile.mkdtemp(prefix="deepseek-workchain-"))
+    probe = workspace / "prewalk_executor_probe.txt"
+    prompt = (
+        "You are the managed DeepSeek executor in a temporary workspace. Do exactly this and nothing else: "
+        "(1) create a file named prewalk_executor_probe.txt whose single line is EXECUTOR_PROBE_OK; "
+        "(2) run the command `git status` and continue regardless of its exit code; "
+        "(3) reply with exactly WORKCHAIN_OK and nothing else."
+    )
+    try:
+        proc = subprocess.run(
+            [
+                codex_bin,
+                "exec",
+                "--skip-git-repo-check",
+                "--json",
+                "-s",
+                "workspace-write",
+                "-C",
+                str(workspace),
+                "-m",
+                MODEL,
+                "-c",
+                'model_provider="deepseek"',
+                "-c",
+                f'model_reasoning_effort="{EFFORT}"',
+                prompt,
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=300,
+        )
+        marker = probe.read_text(encoding="utf-8", errors="replace").strip() if probe.is_file() else None
+        if proc.returncode != 0 or "WORKCHAIN_OK" not in proc.stdout or marker != "EXECUTOR_PROBE_OK":
+            raise ManagerError(
+                "executor_workchain_failed",
+                "DeepSeek 执行面工作链验收失败（读写/命令执行未通过沙箱）。",
+                {
+                    "stderr": proc.stderr[-1200:],
+                    "marker": marker,
+                },
+            )
+        return {"executor_workchain": True, "sandbox": "workspace-write"}
+    finally:
+        shutil.rmtree(workspace, ignore_errors=True)
+
+
 def run_tests(paths: Paths, codex_bin: str) -> dict[str, Any]:
     status = static_status(paths, codex_bin)
     if status["status"] != "configured":
         raise ManagerError("not_configured", "静态配置尚未完整，不能运行实时测试。", status)
     direct = direct_test(paths, codex_bin)
     native = native_test(paths, codex_bin)
+    workchain = executor_workchain_test(paths, codex_bin)
     return result(
         "ready",
         **direct,
         **native,
+        **workchain,
         new_task_required=False,
         restart_required=False,
         note="执行段为受管 codex exec 进程，父会话无需注册 DeepSeek 角色。",

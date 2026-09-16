@@ -26,20 +26,26 @@
 
 ## 执行面兼容性
 
-检查和验收只使用桌面应用内置运行时，不回退到 PATH 中可能版本不同的独立 CLI。Windows Store 安装版位于受保护的 `WindowsApps` 目录；`setup`、`repair` 或 `test` 会把 `codex.exe` 与同目录 `codex-code-mode-host.exe` 一起缓存到 `$CODEX_HOME/codex-deepseek-subagent/desktop-runtime/`。只复制单个 `codex.exe` 会导致验收会话报告 code-mode host 缺失。通过 `CODEX_DESKTOP_BIN` 指定自定义路径时，同目录也必须包含 host。版本号仅作诊断；兼容性由模型目录解析、DeepSeek 直连和执行面口令验收共同决定。
+检查和验收只使用桌面应用内置运行时，不回退到 PATH 中可能版本不同的独立 CLI。Windows Store 安装版位于受保护的 `WindowsApps` 目录；`setup`、`repair` 或 `test` 会把 `codex.exe`、`codex-code-mode-host.exe` 与 `codex-windows-sandbox-setup.exe` 一起缓存到 `$CODEX_HOME/codex-deepseek-subagent/desktop-runtime/`——缺少最后一个会让 `workspace-write` 沙箱的所有命令创建失败（`CreateProcessWithLogonW failed: 2`）。通过 `CODEX_DESKTOP_BIN` 指定自定义路径时，同目录也必须包含这三个文件。版本号仅作诊断；兼容性由模型目录解析、DeepSeek 直连、执行面口令和工作链验收共同决定。
 
-父模型从桌面当前配置动态读取。管理程序会把 `features.multi_agent_v2` 设为 `false`，并把该父模型的 `multi_agent_version` 固定为 `v1`。父模型变化后运行 `repair`。
+父模型从桌面当前配置动态读取。管理程序会把 `features.multi_agent_v2` 设为 `false`，并把该父模型的 `multi_agent_version` 固定为 `v1`；同时把 DeepSeek 目录条目的 `auto_review_model_override` 固定为 `deepseek-flash`，避免提权审批把 `codex-auto-review` 发给 DeepSeek provider（DeepSeek 只接受 deepseek 系列模型名）。父模型变化后运行 `repair`。
 
-桌面 CLI ≥0.146 起，collab/spawn_agent 命名空间被限定在 ChatGPT 后端：原生 `spawn_agent(agent_type="DeepSeek")` 创建的子线程强制走 `openai` provider，自定义 `model_provider` 被忽略，非 OpenAI 模型会直接收到 model-unsupported 400。因此日常 DeepSeek 执行段统一走受管执行面——由本 Skill 管理的 `codex exec` 子进程：
+桌面 CLI ≥0.146 起，collab/spawn_agent 命名空间被限定在 ChatGPT 后端：原生 `spawn_agent(agent_type="DeepSeek")` 创建的子线程强制走 `openai` provider，自定义 `model_provider` 被忽略，非 OpenAI 模型会直接收到 model-unsupported 400。因此日常 DeepSeek 执行段统一走受管执行面——由本 Skill 管理的 `codex exec` 子进程（prewalk skill 中记录了确切命令）：
 
 ```text
-codex exec --skip-git-repo-check -s workspace-write -C "<workspace>" \
-  -m deepseek-flash -c model_provider="deepseek" -c model_reasoning_effort="max" - < "<handoff-package>"
+codex exec --skip-git-repo-check -s danger-full-access -C "<workspace>" \
+  -m deepseek-flash -c model_provider="deepseek" -c model_reasoning_effort="max" \
+  -c approvals_reviewer="user" - < "<handoff-package>"
 ```
 
 该形态在 0.144–0.154 均可用：它只依赖顶层 `model_provider` 覆盖，不经过 collab 命名空间。派发方（如 prewalk skill）从 `status` 获取缓存运行时路径并显式设置 `CODEX_HOME`。
 
-`setup` 或 `test` 会通过桌面内置运行时创建隔离验收会话。验收证据为：受管 `codex exec` 进程以 `deepseek` provider、`deepseek-flash` 模型、`max` 思考程度运行，并返回固定口令 `NATIVE_DEEPSEEK_OK`；可以忽略口令末尾的中英文句号、问号或感叹号，但不能接受其他文本差异。
+### Windows 登录沙箱的已知边界（实测于 0.154.0-alpha.6.2）
+
+- 工作区路径含空格且卷未启用 8.3 短名（`fsutil 8dot3name query` 非 0，Storage Spaces 卷默认禁用）时，`workspace-write`/`read-only` 沙箱创建进程必现 `CreateProcessWithLogonW failed: 2`；C: 盘因 8.3 默认启用而表现正常。
+- 同一环境下 `apply_patch` 对含空格的目标路径写入失败，对无空格路径正常。
+- 即便路径无空格，G: 实测进程创建仍存在偶发失败；因此执行器派发推荐 `danger-full-access` + `approvals_reviewer="user"`，由 SOL 复查实际 diff 兜底，父会话沙箱不受影响。
+- `test`/`repair` 的工作链验收在临时工作区以 `workspace-write` 运行（读目录 → 写探针文件 → 跑命令 → 口令返回），用于确认缓存运行时组件完整；它不替代上述路径限制的判断。
 
 ## API Key
 
