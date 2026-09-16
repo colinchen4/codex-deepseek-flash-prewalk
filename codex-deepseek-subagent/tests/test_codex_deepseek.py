@@ -36,7 +36,7 @@ class DeepSeekManagerTests(unittest.TestCase):
         self.assertNotIn("CODEX_API_KEY", env)
         self.assertEqual(env["SAFE_TEST_VALUE"], "kept")
 
-    def test_stage_windows_store_runtime_copies_codex_and_host(self):
+    def test_stage_windows_store_runtime_copies_execution_bundle(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             resources = root / "OpenAI.Codex_1.2.3_x64__test" / "app" / "resources"
@@ -44,6 +44,7 @@ class DeepSeekManagerTests(unittest.TestCase):
             (resources / "codex.exe").write_bytes(b"codex")
             (resources / MANAGER.WINDOWS_CODE_MODE_HOST).write_bytes(b"host")
             (resources / MANAGER.WINDOWS_SANDBOX_SETUP).write_bytes(b"sandbox-setup")
+            (resources / MANAGER.WINDOWS_COMMAND_RUNNER).write_bytes(b"runner")
             paths = MANAGER.resolve_paths(str(root / "home"))
             staged = MANAGER.stage_windows_store_runtime(resources / "codex.exe", paths)
             self.assertEqual(staged.read_bytes(), b"codex")
@@ -55,14 +56,19 @@ class DeepSeekManagerTests(unittest.TestCase):
                 staged.with_name(MANAGER.WINDOWS_SANDBOX_SETUP).read_bytes(),
                 b"sandbox-setup",
             )
+            self.assertEqual(
+                staged.with_name(MANAGER.WINDOWS_COMMAND_RUNNER).read_bytes(),
+                b"runner",
+            )
 
-    def test_stage_windows_store_runtime_requires_sandbox_setup(self):
+    def test_stage_windows_store_runtime_requires_full_bundle(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             resources = root / "OpenAI.Codex_1.2.3_x64__test" / "app" / "resources"
             resources.mkdir(parents=True)
             (resources / "codex.exe").write_bytes(b"codex")
             (resources / MANAGER.WINDOWS_CODE_MODE_HOST).write_bytes(b"host")
+            (resources / MANAGER.WINDOWS_SANDBOX_SETUP).write_bytes(b"sandbox-setup")
             paths = MANAGER.resolve_paths(str(root / "home"))
             with self.assertRaises(MANAGER.ManagerError):
                 MANAGER.stage_windows_store_runtime(resources / "codex.exe", paths)

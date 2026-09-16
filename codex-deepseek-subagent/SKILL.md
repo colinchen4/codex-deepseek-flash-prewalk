@@ -11,7 +11,7 @@ description: 仅在用户要求配置、检查、测试、修复、停用或卸�
 
 - 只使用桌面应用内置的 Codex 运行时；版本仅用于诊断，兼容性以真实派发验收为准。
 - 固定使用 `deepseek-flash` 和 `max` 思考程度；`status`、`setup`、`repair` 与实时验收必须按同一目标判断。
-- Windows Store 安装版需要完整的 `codex.exe` 与同目录 `codex-code-mode-host.exe`、`codex-windows-sandbox-setup.exe`。由管理程序在 `setup`、`repair` 或 `test` 时缓存完整验收运行时，不要只复制单个 `codex.exe`。
+- Windows Store 安装版需要完整的 `codex.exe` 与同目录 `codex-code-mode-host.exe`、`codex-windows-sandbox-setup.exe`、`codex-command-runner.exe`。由管理程序在 `setup`、`repair` 或 `test` 时缓存完整验收运行时，不要只复制单个 `codex.exe`。
 - 从桌面配置读取父模型，并由管理程序应用 v1 明文派发设置；不要硬编码父模型或手改配置。技术原因见 [references/compatibility.md](references/compatibility.md)。
 - 父模型变化后必须运行 `repair`，再重新验收。
 - DeepSeek-V4.1-Flash 原生支持图片和截图；视频仍由父 Agent 先识别再传入文字事实。

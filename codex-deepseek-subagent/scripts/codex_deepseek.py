@@ -61,6 +61,7 @@ WINDOWS_CODEX_RELATIVE_CANDIDATES = (
 )
 WINDOWS_CODE_MODE_HOST = "codex-code-mode-host.exe"
 WINDOWS_SANDBOX_SETUP = "codex-windows-sandbox-setup.exe"
+WINDOWS_COMMAND_RUNNER = "codex-command-runner.exe"
 
 
 class ManagerError(RuntimeError):
@@ -146,7 +147,7 @@ def windows_runtime_bundle_complete(candidate: Path) -> bool:
         return True
     return all(
         candidate.with_name(filename).is_file()
-        for filename in (WINDOWS_CODE_MODE_HOST, WINDOWS_SANDBOX_SETUP)
+        for filename in (WINDOWS_CODE_MODE_HOST, WINDOWS_SANDBOX_SETUP, WINDOWS_COMMAND_RUNNER)
     )
 
 
@@ -191,7 +192,7 @@ def stage_windows_store_runtime(source: Path, paths: Paths) -> Path:
     package_name = source.parents[2].name
     cache_key = re.sub(r"[^A-Za-z0-9._-]+", "-", package_name)
     target_dir = paths.state_dir / "desktop-runtime" / cache_key
-    required = ("codex.exe", WINDOWS_CODE_MODE_HOST, WINDOWS_SANDBOX_SETUP)
+    required = ("codex.exe", WINDOWS_CODE_MODE_HOST, WINDOWS_SANDBOX_SETUP, WINDOWS_COMMAND_RUNNER)
     for filename in required:
         source_file = source.with_name(filename)
         if not source_file.is_file():
@@ -213,7 +214,7 @@ def find_desktop_codex(paths: Paths | None = None, allow_stage: bool = False) ->
             if platform_name() == "windows" and not windows_runtime_bundle_complete(candidate):
                 raise ManagerError(
                     "desktop_runtime_incomplete",
-                    f"CODEX_DESKTOP_BIN 同目录缺少执行面组件（{WINDOWS_CODE_MODE_HOST}、{WINDOWS_SANDBOX_SETUP}）：{candidate}",
+                    f"CODEX_DESKTOP_BIN 同目录缺少执行面组件（{WINDOWS_CODE_MODE_HOST}、{WINDOWS_SANDBOX_SETUP}、{WINDOWS_COMMAND_RUNNER}）：{candidate}",
                 )
             return str(candidate.resolve())
         raise ManagerError(
